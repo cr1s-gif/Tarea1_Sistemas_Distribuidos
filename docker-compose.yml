@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru
+
+  generador_respuestas:
+    build:
+      context: .
+      dockerfile: Dockerfile.respuestas
+    container_name: generador_respuestas
+    ports:
+      - "8001:8001"
+    environment:
+      - RUTA_CSV=967_buildings.csv
+
+  cache:
+    build:
+      context: .
+      dockerfile: Dockerfile.cache
+    container_name: cache
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST_REDIS=redis
+      - PUERTO_REDIS=6379
+      - DB_REDIS=0
+      - TTL_SEGUNDOS=120
+      - URL_GENERADOR_RESPUESTAS=http://generador_respuestas:8001/resolver
+      - URL_CACHE=http://cache:8000/consulta
+      - INTERVALO_SEGUNDOS=10
+      - DISTRIBUCION=uniforme 
+    depends_on:
+      - redis
+      - generador_respuestas
+    volumes:
+      - ./metricas_output:/app/metricas_output
+
+  generador_trafico:
+    build:
+      context: .
+      dockerfile: Dockerfile.trafico
+    container_name: generador_trafico
+    environment:
+      - URL_CACHE=http://cache:8000/consulta
+      - INTERVALO_SEGUNDOS=10
+    depends_on:
+      - cache
