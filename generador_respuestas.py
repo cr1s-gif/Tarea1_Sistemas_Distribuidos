@@ -1,5 +1,17 @@
-import pandas as pd
+import os
 import math
+import pandas as pd
+
+from fastapi import FastAPI
+
+app = FastAPI()
+
+# Variables globales cargadas al iniciar
+datos_por_zona = None
+areas_por_zona = None
+
+# Ruta dataset
+RUTA_CSV = os.getenv("RUTA_CSV", "967_buildings.csv")
 
 # -----------------------------
 # Zonas predefinidas del PDF
@@ -42,7 +54,6 @@ ZONAS = {
     }
 }
 
-
 # -----------------------------
 # Cargar dataset
 # -----------------------------
@@ -66,7 +77,6 @@ def cargar_dataset(ruta_csv):
 
     return df
 
-
 # -----------------------------
 # Calcular área aproximada de bbox en km²
 # -----------------------------
@@ -81,13 +91,12 @@ def calcular_area_bbox_km2(lat_min, lat_max, lon_min, lon_max):
 
     return alto_km * ancho_km
 
-
 # -----------------------------
 # Separar datos por zona
 # -----------------------------
 def separar_datos_por_zona(df):
-    datos_por_zona = {}
-    areas_por_zona = {}
+    datos = {}
+    areas = {}
 
     for zona_id, zona in ZONAS.items():
         df_zona = df[
@@ -97,26 +106,25 @@ def separar_datos_por_zona(df):
             (df["longitude"] <= zona["lon_max"])
         ].copy()
 
-        datos_por_zona[zona_id] = df_zona
+        datos[zona_id] = df_zona
 
-        areas_por_zona[zona_id] = calcular_area_bbox_km2(
+        areas[zona_id] = calcular_area_bbox_km2(
             zona["lat_min"],
             zona["lat_max"],
             zona["lon_min"],
             zona["lon_max"]
         )
 
-    return datos_por_zona, areas_por_zona
-
+    return datos, areas
 
 # -----------------------------
 # Q1
 # -----------------------------
-def consulta_q1(datos_por_zona, zona_id, confianza_min=0.0):
-    if zona_id not in datos_por_zona:
+def consulta_q1(datos, zona_id, confianza_min=0.0):
+    if zona_id not in datos:
         return {"error": f"Zona inválida: {zona_id}"}
 
-    df_zona = datos_por_zona[zona_id]
+    df_zona = datos[zona_id]
     df_filtrado = df_zona[df_zona["confidence"] >= confianza_min]
 
     return {
@@ -126,15 +134,14 @@ def consulta_q1(datos_por_zona, zona_id, confianza_min=0.0):
         "cantidad_edificios": int(len(df_filtrado))
     }
 
-
 # -----------------------------
 # Q2
 # -----------------------------
-def consulta_q2(datos_por_zona, zona_id, confianza_min=0.0):
-    if zona_id not in datos_por_zona:
+def consulta_q2(datos, zona_id, confianza_min=0.0):
+    if zona_id not in datos:
         return {"error": f"Zona inválida: {zona_id}"}
 
-    df_zona = datos_por_zona[zona_id]
+    df_zona = datos[zona_id]
     df_filtrado = df_zona[df_zona["confidence"] >= confianza_min]
 
     if df_filtrado.empty:
@@ -156,17 +163,15 @@ def consulta_q2(datos_por_zona, zona_id, confianza_min=0.0):
         "cantidad_edificios": int(len(df_filtrado))
     }
 
-
 # -----------------------------
 # Q3
 # -----------------------------
-def consulta_q3(datos_por_zona, areas_por_zona, zona_id, confianza_min=0.0):
-    if zona_id not in datos_por_zona:
+def consulta_q3(datos, areas, zona_id, confianza_min=0.0):
+    if zona_id not in datos:
         return {"error": f"Zona inválida: {zona_id}"}
 
-    cantidad = consulta_q1(datos_por_zona, zona_id, confianza_min)["cantidad_edificios"]
-    area_km2 = areas_por_zona[zona_id]
-
+    cantidad = consulta_q1(datos, zona_id, confianza_min)["cantidad_edificios"]
+    area_km2 = areas[zona_id]
     densidad = cantidad / area_km2 if area_km2 > 0 else 0.0
 
     return {
@@ -176,16 +181,15 @@ def consulta_q3(datos_por_zona, areas_por_zona, zona_id, confianza_min=0.0):
         "densidad_edificios_km2": float(densidad)
     }
 
-
 # -----------------------------
 # Q4
 # -----------------------------
-def consulta_q4(datos_por_zona, areas_por_zona, zona_a, zona_b, confianza_min=0.0):
-    if zona_a not in datos_por_zona or zona_b not in datos_por_zona:
+def consulta_q4(datos, areas, zona_a, zona_b, confianza_min=0.0):
+    if zona_a not in datos or zona_b not in datos:
         return {"error": "Una o ambas zonas son inválidas"}
 
-    densidad_a = consulta_q3(datos_por_zona, areas_por_zona, zona_a, confianza_min)["densidad_edificios_km2"]
-    densidad_b = consulta_q3(datos_por_zona, areas_por_zona, zona_b, confianza_min)["densidad_edificios_km2"]
+    densidad_a = consulta_q3(datos, areas, zona_a, confianza_min)["densidad_edificios_km2"]
+    densidad_b = consulta_q3(datos, areas, zona_b, confianza_min)["densidad_edificios_km2"]
 
     if densidad_a > densidad_b:
         ganador = zona_a
@@ -204,18 +208,17 @@ def consulta_q4(datos_por_zona, areas_por_zona, zona_a, zona_b, confianza_min=0.
         "zona_ganadora": ganador
     }
 
-
 # -----------------------------
 # Q5
 # -----------------------------
-def consulta_q5(datos_por_zona, zona_id, bins=5):
-    if zona_id not in datos_por_zona:
+def consulta_q5(datos, zona_id, bins=5):
+    if zona_id not in datos:
         return {"error": f"Zona inválida: {zona_id}"}
 
     if bins <= 0:
         return {"error": "bins debe ser mayor que 0"}
 
-    df_zona = datos_por_zona[zona_id]
+    df_zona = datos[zona_id]
 
     if df_zona.empty:
         return {
@@ -250,8 +253,10 @@ def consulta_q5(datos_por_zona, zona_id, bins=5):
         "distribucion": distribucion
     }
 
-
-def responder_consulta(consulta, datos_por_zona, areas_por_zona):
+# -----------------------------
+# Resolver consulta
+# -----------------------------
+def responder_consulta(consulta, datos, areas):
     if not isinstance(consulta, dict):
         return {"error": "La consulta debe ser un diccionario"}
 
@@ -268,28 +273,28 @@ def responder_consulta(consulta, datos_por_zona, areas_por_zona):
         if tipo_consulta == "Q1":
             zona_id = consulta.get("zona_id")
             confianza_min = float(parametros.get("confianza_min", 0.0))
-            return consulta_q1(datos_por_zona, zona_id, confianza_min)
+            return consulta_q1(datos, zona_id, confianza_min)
 
         elif tipo_consulta == "Q2":
             zona_id = consulta.get("zona_id")
             confianza_min = float(parametros.get("confianza_min", 0.0))
-            return consulta_q2(datos_por_zona, zona_id, confianza_min)
+            return consulta_q2(datos, zona_id, confianza_min)
 
         elif tipo_consulta == "Q3":
             zona_id = consulta.get("zona_id")
             confianza_min = float(parametros.get("confianza_min", 0.0))
-            return consulta_q3(datos_por_zona, areas_por_zona, zona_id, confianza_min)
+            return consulta_q3(datos, areas, zona_id, confianza_min)
 
         elif tipo_consulta == "Q4":
             zona_a = parametros.get("zona_a")
             zona_b = parametros.get("zona_b")
             confianza_min = float(parametros.get("confianza_min", 0.0))
-            return consulta_q4(datos_por_zona, areas_por_zona, zona_a, zona_b, confianza_min)
+            return consulta_q4(datos, areas, zona_a, zona_b, confianza_min)
 
         elif tipo_consulta == "Q5":
             zona_id = consulta.get("zona_id")
             bins = int(parametros.get("bins", 5))
-            return consulta_q5(datos_por_zona, zona_id, bins)
+            return consulta_q5(datos, zona_id, bins)
 
         else:
             return {"error": f"Tipo de consulta no soportado: {tipo_consulta}"}
@@ -297,30 +302,28 @@ def responder_consulta(consulta, datos_por_zona, areas_por_zona):
     except Exception as e:
         return {"error": f"Error al procesar la consulta: {str(e)}"}
 
-
 # -----------------------------
-# MAIN
+# Startup
 # -----------------------------
-def main():
-    ruta_csv = "967_buildings.csv"
+@app.on_event("startup")
+def iniciar_servicio():
+    global datos_por_zona, areas_por_zona
 
-    print("Cargando dataset...")
-    df = cargar_dataset(ruta_csv)
-
-    print("Separando datos por zona...")
+    print("Cargando dataset en memoria...")
+    df = cargar_dataset(RUTA_CSV)
     datos_por_zona, areas_por_zona = separar_datos_por_zona(df)
+    print("Dataset cargado correctamente.")
 
-    print("\nCantidad de registros por zona:")
-    for zona_id, df_zona in datos_por_zona.items():
-        print(f"{zona_id} ({ZONAS[zona_id]['nombre']}): {len(df_zona)} registros")
+# -----------------------------
+# Endpoints
+# -----------------------------
+@app.get("/health")
+def health():
+    return {
+        "servicio": "generador_respuestas",
+        "dataset_cargado": datos_por_zona is not None
+    }
 
-    print("\nPruebas:")
-    print(consulta_q1(datos_por_zona, "Z1", 0.5))
-    print(consulta_q2(datos_por_zona, "Z2", 0.5))
-    print(consulta_q3(datos_por_zona, areas_por_zona, "Z3", 0.5))
-    print(consulta_q4(datos_por_zona, areas_por_zona, "Z1", "Z4", 0.5))
-    print(consulta_q5(datos_por_zona, "Z5", 5))
-
-
-if __name__ == "__main__":
-    main()
+@app.post("/resolver")
+def resolver(consulta: dict):
+    return responder_consulta(consulta, datos_por_zona, areas_por_zona)
