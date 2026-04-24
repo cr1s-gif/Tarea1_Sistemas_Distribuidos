@@ -4,7 +4,7 @@ import time
 from statistics import median
 
 
-RUTA_ARCHIVO_METRICAS = "metricas.csv"
+RUTA_ARCHIVO_METRICAS = "metricas_output/metricas.csv"
 
 
 def inicializar_archivo_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
