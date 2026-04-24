@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 import json
 from conexion_redis import crear_cliente_redis, probar_conexion
 from generador_respuestas import cargar_dataset, separar_datos_por_zona, responder_consulta
