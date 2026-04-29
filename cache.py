@@ -129,7 +129,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-=======
+
 import json
 import os
 import time
@@ -333,4 +333,4 @@ def procesar_consulta_cache(consulta: dict):
         "clave_cache": clave_cache,
         "respuesta": respuesta_generada
     }
->>>>>>> 1229970 (documentos de docker)
+

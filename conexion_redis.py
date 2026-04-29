@@ -33,7 +33,7 @@ def obtener_valor(cliente, clave):
 
 def guardar_valor(cliente, clave, valor_json, ttl_segundos):
     cliente.setex(clave, ttl_segundos, valor_json)
-=======
+    
 import redis
 
 
