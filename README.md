@@ -10,7 +10,7 @@ El sistema está compuesto por **4 contenedores Docker** que trabajan en conjunt
 
 | Contenedor | Puerto | Rol |
 |---|---|---|
-| `redis` | 6379 | Almacén de caché con política LRU (máx. 200 MB) |
+| `redis` | 6379 | Almacén de caché con política LRU  |
 | `generador_respuestas` | 8001 | Carga el CSV y resuelve consultas geoespaciales |
 | `cache` | 8000 | Intermediario: sirve desde Redis o delega al generador |
 | `generador_trafico` | — | Genera consultas automáticas hacia el caché |
