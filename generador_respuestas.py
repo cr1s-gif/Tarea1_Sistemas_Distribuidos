@@ -6,11 +6,15 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
+# --------------------------------------
 # Variables globales cargadas al iniciar
+# --------------------------------------
 datos_por_zona = None
 areas_por_zona = None
 
-# Ruta dataset
+# -----------------------------
+# Ruta al dataset
+# -----------------------------
 RUTA_CSV = os.getenv("RUTA_CSV", "967_buildings.csv")
 
 # -----------------------------
@@ -77,9 +81,9 @@ def cargar_dataset(ruta_csv):
 
     return df
 
-# -----------------------------
+# --------------------------------------
 # Calcular área aproximada de bbox en km²
-# -----------------------------
+# ---------------------------------------
 def calcular_area_bbox_km2(lat_min, lat_max, lon_min, lon_max):
     lat_centro = (lat_min + lat_max) / 2.0
 

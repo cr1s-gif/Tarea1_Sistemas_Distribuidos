@@ -9,7 +9,9 @@ from metricas import inicializar_archivo_metricas, registrar_metrica
 
 app = FastAPI()
 
-# Configuración
+# -----------------------------
+# Configuracion
+# -----------------------------
 HOST_REDIS = os.getenv("HOST_REDIS", "localhost")
 PUERTO_REDIS = int(os.getenv("PUERTO_REDIS", "6379"))
 DB_REDIS = int(os.getenv("DB_REDIS", "0"))
