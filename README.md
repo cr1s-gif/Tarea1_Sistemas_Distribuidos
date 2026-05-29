@@ -1,201 +1,302 @@
-# Tarea 1 — Sistemas Distribuidos: Cache con Redis
+# Proyecto Sistemas Distribuidos: Cache con Redis y Kafka
 
-Sistema distribuido que implementa una capa de caché sobre un generador de respuestas geoespaciales, usando datos de edificios de la Región Metropolitana de Chile.
+Sistema distribuido para resolver consultas geoespaciales sobre edificios de la Region Metropolitana de Chile. El proyecto combina una capa de cache en Redis con procesamiento asincrono mediante Kafka, reintentos, cola de mensajes fallidos y metricas de ejecucion.
 
----
+## Descripcion General
 
-## Descripción general
+El sistema esta compuesto por servicios Docker que trabajan en conjunto:
 
-El sistema está compuesto por **4 contenedores Docker** que trabajan en conjunto:
+| Servicio | Puerto | Rol |
+|---|---:|---|
+| `redis` | 6379 | Almacen de cache con politica LRU |
+| `kafka` | 9092 | Broker de mensajeria para consultas asincronas |
+| `cache` | 8000 | API principal: responde desde Redis o publica la consulta en Kafka |
+| `consumer_respuestas` | - | Consume consultas desde Kafka, calcula respuestas, guarda en Redis y maneja retry/DLQ |
+| `generador_respuestas` | 8001 | Servicio HTTP original para resolver consultas geoespaciales |
+| `generador_trafico` | - | Genera trafico automatico hacia el cache |
 
-| Contenedor | Puerto | Rol |
-|---|---|---|
-| `redis` | 6379 | Almacén de caché con política LRU  |
-| `generador_respuestas` | 8001 | Carga el CSV y resuelve consultas geoespaciales |
-| `cache` | 8000 | Intermediario: sirve desde Redis o delega al generador |
-| `generador_trafico` | — | Genera consultas automáticas hacia el caché |
+## Flujo de Consulta
 
-### Flujo de una consulta
-
+```text
+generador_trafico o cliente manual
+        |
+        v
+cache:8000
+        |
+        +-- Redis HIT --> respuesta inmediata
+        |
+        +-- Redis MISS --> Kafka topic: consultas
+                              |
+                              v
+                       consumer_respuestas
+                              |
+                              +-- exito --> Redis + topic respuestas + estado completada
+                              |
+                              +-- error recuperable --> topic consultas_retry
+                              |
+                              +-- max intentos --> topic consultas_dlq
 ```
-generador_trafico
-      │
-      ▼
-   cache:8000  ──── Redis HIT ──▶ respuesta inmediata
-      │
-      └── Redis MISS ──▶ generador_respuestas:8001 ──▶ guarda en Redis ──▶ respuesta
-```
 
----
+Cuando una consulta no esta en cache, el endpoint `POST /consulta` devuelve un `consulta_id` con estado `pendiente`. El resultado final se puede consultar con `GET /consulta/{consulta_id}`.
 
-## Tipos de consulta soportados
+## Tipos de Consulta Soportados
 
-Todas las consultas apuntan a una de las 5 zonas predefinidas de Santiago:
+Todas las consultas usan una de las 5 zonas predefinidas de Santiago:
 
 | ID | Zona |
 |---|---|
-| Z1 | Providencia |
-| Z2 | Las Condes |
-| Z3 | Maipú |
-| Z4 | Santiago Centro |
-| Z5 | Pudahuel |
+| `Z1` | Providencia |
+| `Z2` | Las Condes |
+| `Z3` | Maipu |
+| `Z4` | Santiago Centro |
+| `Z5` | Pudahuel |
 
-| Tipo | Descripción |
+| Tipo | Descripcion |
 |---|---|
-| **Q1** | Cantidad de edificios en una zona con confianza mínima |
-| **Q2** | Área promedio y total de edificios en una zona |
-| **Q3** | Densidad de edificios por km² en una zona |
-| **Q4** | Comparación de densidad entre dos zonas |
-| **Q5** | Distribución de confianza en histograma (bins configurables) |
+| `Q1` | Cantidad de edificios en una zona con confianza minima |
+| `Q2` | Area promedio y total de edificios en una zona |
+| `Q3` | Densidad de edificios por km2 en una zona |
+| `Q4` | Comparacion de densidad entre dos zonas |
+| `Q5` | Distribucion de confianza en histograma |
 
----
+## Requisitos
 
-## Requisitos previos
+- Docker Desktop instalado y en ejecucion.
+- Archivo `967_buildings.csv` descargado y ubicado en la raiz del proyecto.
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado y en ejecución
-- El archivo CSV del dataset (ver sección siguiente)
+## Dataset
 
----
+El archivo `967_buildings.csv` no esta incluido en el repositorio por su tamano.
 
-## Dataset: descarga del CSV
+Pasos:
 
-El archivo `967_buildings.csv` contiene los datos de edificios de la Región Metropolitana y **no está incluido en el repositorio** por su tamaño.
+1. Ir a `https://sites.research.google/gr/open-buildings/`.
+2. Descargar el archivo correspondiente a Chile / Region Metropolitana.
+3. Renombrarlo exactamente como `967_buildings.csv` si fuera necesario.
+4. Colocarlo en la raiz del proyecto, junto a `docker-compose.yml`.
 
-**Pasos para descargarlo:**
+El CSV se monta como volumen dentro de los contenedores que lo necesitan. No se copia dentro de la imagen Docker para evitar builds muy lentos.
 
-1. Ir a [https://sites.research.google/gr/open-buildings/](https://sites.research.google/gr/open-buildings/)
-2. Seleccionar la región de Chile / Región Metropolitana
-3. Descargar el archivo `967_buildings.csv`
-4. **Colocarlo en la raíz del repositorio** (junto a los demás archivos `.py` y `docker-compose.yml`)
+## Estructura del Proyecto
 
-> El archivo debe llamarse exactamente `967_buildings.csv`. El servicio `generador_respuestas` lo busca con ese nombre dentro del contenedor.
-
----
-
-## Estructura del repositorio
-
-```
-Tarea1_Sistemas_Distribuidos/
-├── cache.py                    # Servicio de caché (FastAPI, puerto 8000)
-├── generador_respuestas.py     # Servicio de resolución de consultas (FastAPI, puerto 8001)
-├── generador_trafico.py        # Generador de consultas automáticas
-├── conexion_redis.py           # Utilidades para conexión con Redis
-├── metricas.py                 # Registro y cálculo de métricas
-├── Dockerfile.cache            # Imagen del servicio cache
-├── Dockerfile.respuestas       # Imagen del servicio generador_respuestas
-├── Dockerfile.trafico          # Imagen del servicio generador_trafico
-├── docker-compose.yml          # Orquestación de todos los servicios
-├── requirements.txt            # Dependencias Python
-├── metricas_output/
-│   └── metricas.csv            # Métricas generadas en ejecución (montado como volumen)
-└── 967_buildings.csv           # ⚠️ No incluido — descargar por separado
+```text
+Proyecto_Sistemas_Distribuidos/
+|-- cache.py
+|-- conexion_redis.py
+|-- consumer_respuestas.py
+|-- generador_respuestas.py
+|-- generador_trafico.py
+|-- metricas.py
+|-- docker-compose.yml
+|-- Dockerfile.cache
+|-- Dockerfile.consumer
+|-- Dockerfile.respuestas
+|-- Dockerfile.trafico
+|-- requirements.txt
+|-- .dockerignore
+|-- metricas_output/
+|   `-- metricas.csv
+`-- 967_buildings.csv
 ```
 
----
-
-## Levantar el sistema
-
-### Windows (Docker Desktop)
-
-```bash
-docker compose up --build
-```
-
-### macOS / Linux
-
-```bash
-docker compose up --build
-```
-
-> El comando es idéntico en los tres sistemas operativos. Docker Desktop en Windows usa el backend WSL2, por lo que no requiere ningún ajuste adicional.
-
-**Primera ejecución:** Docker descargará la imagen base de Python 3.11 e instalará las dependencias. Esto puede tardar unos minutos. Las ejecuciones siguientes serán más rápidas gracias al caché de capas de Docker.
-
-### Para ejecutar en segundo plano
+## Levantar el Sistema
 
 ```bash
 docker compose up --build -d
 ```
 
-### Para detener
+Para ver el estado:
+
+```bash
+docker compose ps
+```
+
+Para detener todo:
 
 ```bash
 docker compose down
 ```
 
----
+## Verificar Servicios
 
-## Verificar que todo funciona
-
-Una vez levantados los contenedores, podés verificar el estado de los servicios:
+Estado del cache:
 
 ```bash
-# Estado del servicio de caché
 curl http://localhost:8000/health
+```
 
-# Estado del generador de respuestas
+Respuesta esperada:
+
+```json
+{
+  "servicio": "cache",
+  "redis_conectado": true,
+  "kafka_configurado": true,
+  "kafka_bootstrap_servers": "kafka:29092",
+  "topic_consultas": "consultas"
+}
+```
+
+Estado del generador HTTP original:
+
+```bash
 curl http://localhost:8001/health
 ```
 
-Respuesta esperada del caché:
+## Consultas Manuales
+
+### Q1
+
+```bash
+curl -X POST http://localhost:8000/consulta \
+  -H "Content-Type: application/json" \
+  -d '{"tipo_consulta":"Q1","zona_id":"Z1","parametros":{"confianza_min":0.5}}'
+```
+
+Si no existe en cache, la respuesta sera parecida a:
+
 ```json
-{"servicio": "cache", "redis_conectado": true}
+{
+  "cache_hit": false,
+  "origen": "kafka",
+  "estado": "pendiente",
+  "consulta_id": "uuid",
+  "topic": "consultas",
+  "clave_cache": "count:Z1:conf=0.5"
+}
 ```
 
----
+Luego se consulta el estado:
 
-## Hacer una consulta manual
+```bash
+curl http://localhost:8000/consulta/uuid
+```
 
-También podés enviar consultas directamente al servicio de caché:
+Cuando el consumidor termina:
 
-**Q1 — Contar edificios en Providencia con confianza ≥ 0.5:**
+```json
+{
+  "estado": "completada",
+  "origen": "consumer_respuestas",
+  "respuesta": {
+    "tipo_consulta": "Q1",
+    "zona_id": "Z1",
+    "cantidad_edificios": 15639
+  }
+}
+```
+
+Si se repite la misma consulta dentro del TTL, responde desde Redis:
+
+```json
+{
+  "cache_hit": true,
+  "origen": "cache"
+}
+```
+
+### Q4
+
 ```bash
 curl -X POST http://localhost:8000/consulta \
   -H "Content-Type: application/json" \
-  -d '{"tipo_consulta": "Q1", "zona_id": "Z1", "parametros": {"confianza_min": 0.5}}'
+  -d '{"tipo_consulta":"Q4","parametros":{"zona_a":"Z1","zona_b":"Z2","confianza_min":0.5}}'
 ```
 
-**Q4 — Comparar densidad entre dos zonas:**
+## Trafico Automatico
+
+El servicio `generador_trafico` envia consultas automaticamente al cache. Si el contenedor esta corriendo, se generara trafico continuo segun las variables configuradas en `docker-compose.yml`.
+
+Iniciar solo el generador de trafico:
+
 ```bash
-curl -X POST http://localhost:8000/consulta \
-  -H "Content-Type: application/json" \
-  -d '{"tipo_consulta": "Q4", "parametros": {"zona_a": "Z1", "zona_b": "Z2", "confianza_min": 0.3}}'
+docker compose start generador_trafico
 ```
 
-La respuesta incluirá `"cache_hit": true` o `"cache_hit": false` según si la respuesta fue servida desde Redis o calculada en el momento.
+Detenerlo:
 
----
+```bash
+docker compose stop generador_trafico
+```
 
-## Métricas
+Con carga normal es posible que el consumidor procese rapido y el lag de Kafka se mantenga en `0`. Para forzar acumulacion de cola se puede ajustar:
 
-El sistema registra automáticamente métricas de cada consulta en `metricas_output/metricas.csv`. Este archivo se genera en la máquina host (gracias al volumen Docker) y persiste entre reinicios del contenedor.
+| Variable | Descripcion |
+|---|---|
+| `MODO_TRAFICO` | `normal`, `alta_carga` o `spike` |
+| `CONSULTAS_POR_SEGUNDO` | QPS fijo; si es `0`, usa el modo configurado |
+| `SPIKE_CONSULTAS_POR_SEGUNDO` | QPS durante un spike |
+| `DURACION_SPIKE_SEGUNDOS` | Duracion del spike |
+| `CONCURRENCIA` | Maximo de workers concurrentes |
+| `DISTRIBUCION` | `uniforme` o `zipf` |
 
-Columnas registradas: `timestamp`, `tipo_consulta`, `zona_id`, `cache_hit`, `latencia_ms`, `throughput_qps`, `ttl_segundos`, `clave_cache`, `origen_respuesta`, entre otras.
+## Kafka, Retry y DLQ
 
----
+Topicos usados:
 
-## Variables de entorno configurables
+| Topico | Uso |
+|---|---|
+| `consultas` | Consultas nuevas publicadas por el cache |
+| `respuestas` | Resultados completados |
+| `consultas_retry` | Consultas que fallaron y deben reintentarse |
+| `consultas_dlq` | Consultas fallidas despues del maximo de intentos |
 
-El comportamiento de los servicios se puede ajustar desde `docker-compose.yml`:
+El consumidor usa `MAX_INTENTOS=3`. Si una consulta falla 3 veces, queda con estado `dlq`.
 
-| Variable | Servicio | Default | Descripción |
-|---|---|---|---|
-| `TTL_SEGUNDOS` | cache | `120` | Tiempo de vida de entradas en Redis |
-| `DISTRIBUCION` | cache | `uniforme` | Distribución de consultas: `uniforme` o `zipf` |
-| `INTERVALO_SEGUNDOS` | trafico / cache | `10` | Segundos entre consultas automáticas |
-| `HOST_REDIS` | cache | `redis` | Hostname del contenedor Redis |
-| `RUTA_CSV` | generador_respuestas | `967_buildings.csv` | Nombre del archivo CSV |
+Ver lag/backlog del grupo consumidor:
 
----
+```bash
+docker compose exec -T kafka kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group consumer-respuestas
+```
+
+## Metricas
+
+Las metricas se guardan en:
+
+```text
+metricas_output/metricas.csv
+```
+
+Incluyen datos como:
+
+- `cache_hit`
+- `latencia_ms`
+- `throughput_qps`
+- `consulta_id`
+- `estado`
+- `intentos`
+- `retry_count`
+- `dlq`
+- `backlog_size`
+- `recovery_time_ms`
+- `escenario`
+- `num_consumidores`
+
+## Variables Principales
+
+| Variable | Servicio | Descripcion |
+|---|---|---|
+| `TTL_SEGUNDOS` | cache/consumer | Tiempo de vida de entradas en Redis |
+| `TTL_ESTADO_CONSULTA_SEGUNDOS` | cache/consumer | Tiempo de vida del estado de una consulta |
+| `KAFKA_BOOTSTRAP_SERVERS` | cache/consumer | Broker Kafka |
+| `TOPIC_CONSULTAS` | cache/consumer | Topico de consultas |
+| `TOPIC_RESPUESTAS` | consumer | Topico de respuestas |
+| `TOPIC_RETRY` | consumer | Topico de reintentos |
+| `TOPIC_DLQ` | consumer | Topico de mensajes fallidos |
+| `MAX_INTENTOS` | consumer | Maximo de intentos antes de DLQ |
+| `SIMULAR_FALLOS` | generador/consumer | Activa fallos artificiales |
+| `PROBABILIDAD_FALLO` | generador/consumer | Probabilidad de fallo artificial |
+| `LATENCIA_ARTIFICIAL_MS` | generador/consumer | Latencia artificial por consulta |
 
 ## Dependencias
 
-```
+```text
 fastapi
 uvicorn
 requests
 redis
 pandas
+confluent-kafka
 ```
 
-Python 3.11 — instaladas automáticamente dentro de los contenedores al hacer `docker compose up --build`.
+Python 3.11 se usa dentro de los contenedores Docker.
