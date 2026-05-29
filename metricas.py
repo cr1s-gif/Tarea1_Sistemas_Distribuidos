@@ -6,25 +6,63 @@ from statistics import median
 
 RUTA_ARCHIVO_METRICAS = "metricas_output/metricas.csv"
 
+COLUMNAS_METRICAS = [
+    "timestamp",
+    "tipo_consulta",
+    "zona_id",
+    "zona_a",
+    "zona_b",
+    "cache_hit",
+    "latencia_ms",
+    "throughput_qps",
+    "hubo_eviction",
+    "ttl_segundos",
+    "clave_cache",
+    "origen_respuesta",
+    "consulta_id",
+    "estado",
+    "intentos",
+    "max_intentos",
+    "topic_origen",
+    "topic_destino",
+    "topic_respuesta",
+    "retry_count",
+    "dlq",
+    "recuperada",
+    "backlog_size",
+    "recovery_time_ms",
+    "escenario",
+    "num_consumidores",
+    "error",
+]
+
 
 def inicializar_archivo_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
+    os.makedirs(os.path.dirname(ruta_archivo), exist_ok=True)
+
     if not os.path.exists(ruta_archivo):
-        with open(ruta_archivo, mode="w", newline="", encoding="utf-8") as archivo:
-            writer = csv.writer(archivo)
-            writer.writerow([
-                "timestamp",
-                "tipo_consulta",
-                "zona_id",
-                "zona_a",
-                "zona_b",
-                "cache_hit",
-                "latencia_ms",
-                "throughput_qps",
-                "hubo_eviction",
-                "ttl_segundos",
-                "clave_cache",
-                "origen_respuesta"
-            ])
+        escribir_metricas(ruta_archivo, [])
+        return
+
+    with open(ruta_archivo, mode="r", newline="", encoding="utf-8") as archivo:
+        reader = csv.DictReader(archivo)
+        columnas_actuales = reader.fieldnames or []
+
+        if columnas_actuales == COLUMNAS_METRICAS:
+            return
+
+        filas = list(reader)
+
+    escribir_metricas(ruta_archivo, filas)
+
+
+def escribir_metricas(ruta_archivo, filas):
+    with open(ruta_archivo, mode="w", newline="", encoding="utf-8") as archivo:
+        writer = csv.DictWriter(archivo, fieldnames=COLUMNAS_METRICAS)
+        writer.writeheader()
+
+        for fila in filas:
+            writer.writerow({columna: fila.get(columna, "") for columna in COLUMNAS_METRICAS})
 
 
 def registrar_metrica(
@@ -39,26 +77,74 @@ def registrar_metrica(
     ttl_segundos=None,
     clave_cache=None,
     origen_respuesta=None,
-    ruta_archivo=RUTA_ARCHIVO_METRICAS
+    consulta_id=None,
+    estado=None,
+    intentos=0,
+    max_intentos=None,
+    topic_origen=None,
+    topic_destino=None,
+    topic_respuesta=None,
+    retry_count=0,
+    dlq=False,
+    recuperada=False,
+    backlog_size=None,
+    recovery_time_ms=None,
+    escenario=None,
+    num_consumidores=None,
+    error=None,
+    ruta_archivo=RUTA_ARCHIVO_METRICAS,
 ):
-    timestamp = time.time()
+    inicializar_archivo_metricas(ruta_archivo)
+
+    fila = {
+        "timestamp": time.time(),
+        "tipo_consulta": tipo_consulta,
+        "zona_id": zona_id,
+        "zona_a": zona_a,
+        "zona_b": zona_b,
+        "cache_hit": cache_hit,
+        "latencia_ms": latencia_ms,
+        "throughput_qps": throughput_qps,
+        "hubo_eviction": hubo_eviction,
+        "ttl_segundos": ttl_segundos,
+        "clave_cache": clave_cache,
+        "origen_respuesta": origen_respuesta,
+        "consulta_id": consulta_id,
+        "estado": estado,
+        "intentos": intentos,
+        "max_intentos": max_intentos,
+        "topic_origen": topic_origen,
+        "topic_destino": topic_destino,
+        "topic_respuesta": topic_respuesta,
+        "retry_count": retry_count,
+        "dlq": dlq,
+        "recuperada": recuperada,
+        "backlog_size": backlog_size,
+        "recovery_time_ms": recovery_time_ms,
+        "escenario": escenario,
+        "num_consumidores": num_consumidores,
+        "error": error,
+    }
 
     with open(ruta_archivo, mode="a", newline="", encoding="utf-8") as archivo:
-        writer = csv.writer(archivo)
-        writer.writerow([
-            timestamp,
-            tipo_consulta,
-            zona_id,
-            zona_a,
-            zona_b,
-            cache_hit,
-            latencia_ms,
-            throughput_qps,
-            hubo_eviction,
-            ttl_segundos,
-            clave_cache,
-            origen_respuesta
-        ])
+        writer = csv.DictWriter(archivo, fieldnames=COLUMNAS_METRICAS)
+        writer.writerow(fila)
+
+
+def convertir_float(valor, default=0.0):
+    if valor in ("", None, "None"):
+        return default
+    return float(valor)
+
+
+def convertir_int(valor, default=0):
+    if valor in ("", None, "None"):
+        return default
+    return int(float(valor))
+
+
+def convertir_bool(valor):
+    return str(valor).lower() == "true"
 
 
 def leer_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
@@ -72,18 +158,33 @@ def leer_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
 
         for fila in reader:
             metricas.append({
-                "timestamp": float(fila["timestamp"]),
-                "tipo_consulta": fila["tipo_consulta"],
-                "zona_id": fila["zona_id"] if fila["zona_id"] else None,
-                "zona_a": fila["zona_a"] if fila["zona_a"] else None,
-                "zona_b": fila["zona_b"] if fila["zona_b"] else None,
-                "cache_hit": fila["cache_hit"] == "True",
-                "latencia_ms": float(fila["latencia_ms"]),
-                "throughput_qps": float(fila["throughput_qps"]),
-                "hubo_eviction": fila["hubo_eviction"] == "True",
-                "ttl_segundos": int(fila["ttl_segundos"]) if fila["ttl_segundos"] not in ("", "None") else None,
-                "clave_cache": fila["clave_cache"] if fila["clave_cache"] else None,
-                "origen_respuesta": fila["origen_respuesta"] if fila["origen_respuesta"] else None
+                "timestamp": convertir_float(fila.get("timestamp")),
+                "tipo_consulta": fila.get("tipo_consulta") or None,
+                "zona_id": fila.get("zona_id") or None,
+                "zona_a": fila.get("zona_a") or None,
+                "zona_b": fila.get("zona_b") or None,
+                "cache_hit": convertir_bool(fila.get("cache_hit")),
+                "latencia_ms": convertir_float(fila.get("latencia_ms")),
+                "throughput_qps": convertir_float(fila.get("throughput_qps")),
+                "hubo_eviction": convertir_bool(fila.get("hubo_eviction")),
+                "ttl_segundos": convertir_int(fila.get("ttl_segundos"), None),
+                "clave_cache": fila.get("clave_cache") or None,
+                "origen_respuesta": fila.get("origen_respuesta") or None,
+                "consulta_id": fila.get("consulta_id") or None,
+                "estado": fila.get("estado") or None,
+                "intentos": convertir_int(fila.get("intentos")),
+                "max_intentos": convertir_int(fila.get("max_intentos"), None),
+                "topic_origen": fila.get("topic_origen") or None,
+                "topic_destino": fila.get("topic_destino") or None,
+                "topic_respuesta": fila.get("topic_respuesta") or None,
+                "retry_count": convertir_int(fila.get("retry_count")),
+                "dlq": convertir_bool(fila.get("dlq")),
+                "recuperada": convertir_bool(fila.get("recuperada")),
+                "backlog_size": convertir_int(fila.get("backlog_size"), None),
+                "recovery_time_ms": convertir_float(fila.get("recovery_time_ms"), None),
+                "escenario": fila.get("escenario") or None,
+                "num_consumidores": convertir_int(fila.get("num_consumidores"), None),
+                "error": fila.get("error") or None,
             })
 
     return metricas
@@ -171,17 +272,76 @@ def calcular_eviction_rate(metricas):
     return evictions / duracion_minutos
 
 
+def calcular_rate_por_estado(metricas, estado):
+    if not metricas:
+        return 0.0
+
+    total = len(metricas)
+    cantidad = sum(1 for metrica in metricas if metrica["estado"] == estado)
+    return cantidad / total if total > 0 else 0.0
+
+
+def calcular_recovery_rate(metricas):
+    consultas_con_retry = {
+        metrica["consulta_id"]
+        for metrica in metricas
+        if metrica["consulta_id"] and metrica["retry_count"] > 0
+    }
+
+    if not consultas_con_retry:
+        return 0.0
+
+    recuperadas = {
+        metrica["consulta_id"]
+        for metrica in metricas
+        if metrica["consulta_id"] in consultas_con_retry and metrica["estado"] == "completada"
+    }
+
+    return len(recuperadas) / len(consultas_con_retry)
+
+
+def calcular_recovery_time_promedio(metricas):
+    tiempos = [
+        metrica["recovery_time_ms"]
+        for metrica in metricas
+        if metrica["recovery_time_ms"] is not None
+    ]
+
+    if not tiempos:
+        return 0.0
+
+    return sum(tiempos) / len(tiempos)
+
+
+def calcular_backlog_promedio(metricas):
+    valores = [
+        metrica["backlog_size"]
+        for metrica in metricas
+        if metrica["backlog_size"] is not None
+    ]
+
+    if not valores:
+        return 0.0
+
+    return sum(valores) / len(valores)
+
+
 def resumen_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
     metricas = leer_metricas(ruta_archivo)
 
     resumen = {
-        "total_consultas": len(metricas),
+        "total_eventos": len(metricas),
         "hit_rate": calcular_hit_rate(metricas),
         "miss_rate": calcular_miss_rate(metricas),
         "latencia_p50_ms": calcular_latencia_p50(metricas),
         "latencia_p95_ms": calcular_latencia_p95(metricas),
         "throughput_promedio_qps": calcular_throughput_promedio(metricas),
-        "eviction_rate_por_minuto": calcular_eviction_rate(metricas)
+        "eviction_rate_por_minuto": calcular_eviction_rate(metricas),
+        "retry_rate": calcular_rate_por_estado(metricas, "retry"),
+        "dlq_rate": calcular_rate_por_estado(metricas, "dlq"),
+        "recovery_rate": calcular_recovery_rate(metricas),
+        "recovery_time_promedio_ms": calcular_recovery_time_promedio(metricas),
+        "backlog_promedio": calcular_backlog_promedio(metricas),
     }
 
     return resumen
@@ -189,38 +349,9 @@ def resumen_metricas(ruta_archivo=RUTA_ARCHIVO_METRICAS):
 
 def main():
     inicializar_archivo_metricas()
-
-    print("Archivo de métricas inicializado.")
-
-    registrar_metrica(
-        tipo_consulta="Q1",
-        zona_id="Z1",
-        cache_hit=False,
-        latencia_ms=12.4,
-        throughput_qps=0.1,
-        hubo_eviction=False,
-        ttl_segundos=120,
-        clave_cache="count:Z1:conf=0.5",
-        origen_respuesta="generador_respuestas"
-    )
-
-    registrar_metrica(
-        tipo_consulta="Q1",
-        zona_id="Z1",
-        cache_hit=True,
-        latencia_ms=1.8,
-        throughput_qps=0.1,
-        hubo_eviction=False,
-        ttl_segundos=120,
-        clave_cache="count:Z1:conf=0.5",
-        origen_respuesta="cache"
-    )
-
-    print("Métricas de prueba registradas.\n")
-
-    resumen = resumen_metricas()
-    print("Resumen de métricas:")
-    print(resumen)
+    print("Archivo de metricas inicializado.")
+    print("Resumen de metricas:")
+    print(resumen_metricas())
 
 
 if __name__ == "__main__":

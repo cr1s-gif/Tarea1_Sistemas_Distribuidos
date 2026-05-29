@@ -1,4 +1,4 @@
-   import redis
+import redis
 
 
 def crear_cliente_redis(host="localhost", puerto=6379, db=0):

@@ -6,7 +6,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY generador_respuestas.py .
-COPY 967_buildings.csv .
 
 EXPOSE 8001
 

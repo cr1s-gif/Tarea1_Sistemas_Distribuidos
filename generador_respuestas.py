@@ -1,5 +1,7 @@
 import os
 import math
+import random
+import time
 import pandas as pd
 
 from fastapi import FastAPI
@@ -16,6 +18,10 @@ areas_por_zona = None
 # Ruta al dataset
 # -----------------------------
 RUTA_CSV = os.getenv("RUTA_CSV", "967_buildings.csv")
+
+SIMULAR_FALLOS = os.getenv("SIMULAR_FALLOS", "false").lower() == "true"
+PROBABILIDAD_FALLO = float(os.getenv("PROBABILIDAD_FALLO", "0.0"))
+LATENCIA_ARTIFICIAL_MS = int(os.getenv("LATENCIA_ARTIFICIAL_MS", "0"))
 
 # -----------------------------
 # Zonas predefinidas del PDF
@@ -62,24 +68,42 @@ ZONAS = {
 # Cargar dataset
 # -----------------------------
 def cargar_dataset(ruta_csv):
-    df = pd.read_csv(ruta_csv)
-
     columnas_necesarias = ["latitude", "longitude", "area_in_meters", "confidence"]
-    for columna in columnas_necesarias:
-        if columna not in df.columns:
-            raise ValueError(f"Falta la columna requerida: {columna}")
+    chunks_filtrados = []
 
-    df = df[columnas_necesarias].copy()
-    df = df.dropna()
+    try:
+        lector_csv = pd.read_csv(
+            ruta_csv,
+            usecols=columnas_necesarias,
+            chunksize=200_000
+        )
 
-    df["latitude"] = pd.to_numeric(df["latitude"], errors="coerce")
-    df["longitude"] = pd.to_numeric(df["longitude"], errors="coerce")
-    df["area_in_meters"] = pd.to_numeric(df["area_in_meters"], errors="coerce")
-    df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+        for chunk in lector_csv:
+            for columna in columnas_necesarias:
+                chunk[columna] = pd.to_numeric(chunk[columna], errors="coerce")
 
-    df = df.dropna()
+            chunk = chunk.dropna()
 
-    return df
+            mascara_zonas = False
+            for zona in ZONAS.values():
+                mascara_zonas = mascara_zonas | (
+                    (chunk["latitude"] >= zona["lat_min"]) &
+                    (chunk["latitude"] <= zona["lat_max"]) &
+                    (chunk["longitude"] >= zona["lon_min"]) &
+                    (chunk["longitude"] <= zona["lon_max"])
+                )
+
+            chunk_filtrado = chunk[mascara_zonas].copy()
+            if not chunk_filtrado.empty:
+                chunks_filtrados.append(chunk_filtrado)
+
+    except ValueError as exc:
+        raise ValueError(f"Falta una columna requerida en el CSV: {exc}")
+
+    if not chunks_filtrados:
+        return pd.DataFrame(columns=columnas_necesarias)
+
+    return pd.concat(chunks_filtrados, ignore_index=True)
 
 # --------------------------------------
 # Calcular área aproximada de bbox en km²
@@ -257,10 +281,20 @@ def consulta_q5(datos, zona_id, bins=5):
         "distribucion": distribucion
     }
 
+
+def aplicar_condiciones_experimentales():
+    if LATENCIA_ARTIFICIAL_MS > 0:
+        time.sleep(LATENCIA_ARTIFICIAL_MS / 1000)
+
+    if SIMULAR_FALLOS and random.random() < PROBABILIDAD_FALLO:
+        raise RuntimeError("Fallo temporal simulado en el generador de respuestas")
+
 # -----------------------------
 # Resolver consulta
 # -----------------------------
 def responder_consulta(consulta, datos, areas):
+    aplicar_condiciones_experimentales()
+
     if not isinstance(consulta, dict):
         return {"error": "La consulta debe ser un diccionario"}
 
@@ -325,7 +359,10 @@ def iniciar_servicio():
 def health():
     return {
         "servicio": "generador_respuestas",
-        "dataset_cargado": datos_por_zona is not None
+        "dataset_cargado": datos_por_zona is not None,
+        "simular_fallos": SIMULAR_FALLOS,
+        "probabilidad_fallo": PROBABILIDAD_FALLO,
+        "latencia_artificial_ms": LATENCIA_ARTIFICIAL_MS
     }
 
 @app.post("/resolver")

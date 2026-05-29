@@ -1,8 +1,9 @@
 import json
 import os
 import time
-import requests
+import uuid
 
+from confluent_kafka import KafkaException, Producer
 from fastapi import FastAPI
 from conexion_redis import crear_cliente_redis, probar_conexion
 from metricas import inicializar_archivo_metricas, registrar_metrica
@@ -17,13 +18,13 @@ PUERTO_REDIS = int(os.getenv("PUERTO_REDIS", "6379"))
 DB_REDIS = int(os.getenv("DB_REDIS", "0"))
 
 TTL_SEGUNDOS = int(os.getenv("TTL_SEGUNDOS", "120"))
+TTL_ESTADO_CONSULTA_SEGUNDOS = int(os.getenv("TTL_ESTADO_CONSULTA_SEGUNDOS", "600"))
 
-URL_GENERADOR_RESPUESTAS = os.getenv(
-    "URL_GENERADOR_RESPUESTAS",
-    "http://localhost:8001/resolver"
-)
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+TOPIC_CONSULTAS = os.getenv("TOPIC_CONSULTAS", "consultas")
 
 cliente_redis = None
+productor_kafka = None
 
 
 # -----------------------------
@@ -31,7 +32,7 @@ cliente_redis = None
 # -----------------------------
 @app.on_event("startup")
 def iniciar_servicio():
-    global cliente_redis
+    global cliente_redis, productor_kafka
 
     print("Inicializando archivo de métricas...")
     inicializar_archivo_metricas()
@@ -47,6 +48,13 @@ def iniciar_servicio():
         raise Exception("No se pudo conectar a Redis")
 
     print("Conexión con Redis exitosa.")
+
+    print("Configurando productor Kafka...")
+    productor_kafka = Producer({
+        "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
+        "client.id": "cache"
+    })
+    print("Productor Kafka configurado.")
 
 
 # -----------------------------
@@ -101,6 +109,27 @@ def guardar_en_cache(clave, respuesta, ttl_segundos=120):
     cliente_redis.setex(clave, ttl_segundos, respuesta_json)
 
 
+def construir_clave_estado_consulta(consulta_id):
+    return f"consulta_estado:{consulta_id}"
+
+
+def guardar_estado_consulta(consulta_id, estado):
+    cliente_redis.setex(
+        construir_clave_estado_consulta(consulta_id),
+        TTL_ESTADO_CONSULTA_SEGUNDOS,
+        json.dumps(estado)
+    )
+
+
+def buscar_estado_consulta(consulta_id):
+    valor = cliente_redis.get(construir_clave_estado_consulta(consulta_id))
+
+    if valor is None:
+        return None
+
+    return json.loads(valor)
+
+
 def extraer_datos_metricas(consulta):
     tipo_consulta = consulta.get("tipo_consulta")
     zona_id = consulta.get("zona_id")
@@ -112,10 +141,37 @@ def extraer_datos_metricas(consulta):
     return tipo_consulta, zona_id, zona_a, zona_b
 
 
-def pedir_respuesta_al_generador(consulta):
-    respuesta_http = requests.post(URL_GENERADOR_RESPUESTAS, json=consulta, timeout=30)
-    respuesta_http.raise_for_status()
-    return respuesta_http.json()
+def publicar_consulta_kafka(consulta_id, clave_cache, consulta):
+    if productor_kafka is None:
+        raise RuntimeError("Productor Kafka no inicializado")
+
+    errores_entrega = []
+
+    def confirmar_entrega(error, mensaje):
+        if error is not None:
+            errores_entrega.append(str(error))
+
+    mensaje = {
+        "consulta_id": consulta_id,
+        "clave_cache": clave_cache,
+        "consulta": consulta,
+        "intentos": 0,
+        "timestamp_creacion": time.time()
+    }
+
+    productor_kafka.produce(
+        TOPIC_CONSULTAS,
+        key=clave_cache,
+        value=json.dumps(mensaje),
+        callback=confirmar_entrega
+    )
+    mensajes_pendientes = productor_kafka.flush(5)
+
+    if errores_entrega:
+        raise KafkaException(errores_entrega[0])
+
+    if mensajes_pendientes > 0:
+        raise TimeoutError("Kafka no confirmo la publicacion dentro del timeout")
 
 
 # -----------------------------
@@ -127,8 +183,24 @@ def health():
 
     return {
         "servicio": "cache",
-        "redis_conectado": redis_ok
+        "redis_conectado": redis_ok,
+        "kafka_configurado": productor_kafka is not None,
+        "kafka_bootstrap_servers": KAFKA_BOOTSTRAP_SERVERS,
+        "topic_consultas": TOPIC_CONSULTAS
     }
+
+
+@app.get("/consulta/{consulta_id}")
+def obtener_estado_consulta(consulta_id: str):
+    estado = buscar_estado_consulta(consulta_id)
+
+    if estado is None:
+        return {
+            "consulta_id": consulta_id,
+            "estado": "no_encontrada"
+        }
+
+    return estado
 
 
 @app.post("/consulta")
@@ -170,14 +242,36 @@ def procesar_consulta_cache(consulta: dict):
             "respuesta": respuesta_cache
         }
 
-    try:
-        respuesta_generada = pedir_respuesta_al_generador(consulta)
-    except Exception as e:
-        return {
-            "error": f"No se pudo obtener respuesta del generador de respuestas: {str(e)}"
-        }
+    consulta_id = str(uuid.uuid4())
 
-    guardar_en_cache(clave_cache, respuesta_generada, TTL_SEGUNDOS)
+    estado_pendiente = {
+        "consulta_id": consulta_id,
+        "estado": "pendiente",
+        "cache_hit": False,
+        "origen": "kafka",
+        "topic": TOPIC_CONSULTAS,
+        "clave_cache": clave_cache,
+        "consulta": consulta,
+        "timestamp_creacion": time.time()
+    }
+    guardar_estado_consulta(consulta_id, estado_pendiente)
+
+    try:
+        publicar_consulta_kafka(consulta_id, clave_cache, consulta)
+    except Exception as e:
+        estado_error = {
+            **estado_pendiente,
+            "estado": "error_publicacion",
+            "error": str(e),
+            "timestamp_error": time.time()
+        }
+        guardar_estado_consulta(consulta_id, estado_error)
+
+        return {
+            "error": f"No se pudo publicar la consulta en Kafka: {str(e)}",
+            "consulta_id": consulta_id,
+            "clave_cache": clave_cache
+        }
 
     fin = time.time()
     latencia_ms = (fin - inicio) * 1000
@@ -194,13 +288,23 @@ def procesar_consulta_cache(consulta: dict):
         hubo_eviction=False,
         ttl_segundos=TTL_SEGUNDOS,
         clave_cache=clave_cache,
-        origen_respuesta="generador_respuestas"
+        origen_respuesta="kafka_pendiente",
+        consulta_id=consulta_id,
+        estado="pendiente",
+        intentos=0,
+        retry_count=0,
+        dlq=False,
+        recuperada=False,
+        topic_destino=TOPIC_CONSULTAS
     )
 
     return {
         "cache_hit": False,
-        "origen": "generador_respuestas",
+        "origen": "kafka",
+        "estado": "pendiente",
+        "consulta_id": consulta_id,
+        "topic": TOPIC_CONSULTAS,
         "clave_cache": clave_cache,
-        "respuesta": respuesta_generada
+        "mensaje": "Consulta publicada en Kafka para procesamiento asincrono"
     }
 
